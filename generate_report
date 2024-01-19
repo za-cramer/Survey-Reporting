@@ -1,20 +1,33 @@
+# PACKAGES ! #
+import os
+import warnings
+from datetime import datetime
+
+import pandas as pd
+from docx import Document
+
 # EDIT GLOBAL VARIABLES BELOW #
-ReportTitle = ["Oklahoma Survey"]
+ReportTitle = "Oklahoma Survey"
 
 import_file_path = (
     "G:/My Drive/Data Work/Handy/Projects/OK County 10.2021/Text_OK_County.csv"
 )
 output_file_path = (
-    "G:/My Drive/Data Work/Handy/Projects/OK County 10.2021/output/python/"
+    "G:/My Drive/Data Work/Handy/Projects/Test"
 )
 survey_path = (
     "G:/My Drive/Data Work/Handy/Projects/OK County 10.2021/OK County Survey_V2.docx"
 )
 
 number_of_questions = 15  # i.e., 15 will result in Q1-Q15
-additional_columns = ["sex", "age"]  # i.e., ['sex','age']
+additional_columns = ["sex", "age"]  # i.e., ['sex','age'] - anything in addition to Q#
 
-gender_weights = {"Female": 0.52, "Male": 0.48}
+# Columns to Weight #
+
+# Format
+#   VAR_weights = {cat1: X.XX, cat2: X.XX} 
+
+gender_weights = {"Female": 0.62, "Male": 0.38}
 
 age_weights = {
     "18-29": 0.05416,
@@ -28,14 +41,6 @@ age_weights = {
 ###### !! DO NOT EDIT BELOW !! ######
 #####################################
 
-# PACKAGES ! #
-import os
-import warnings
-from datetime import datetime
-
-import pandas as pd
-from docx import Document
-
 # Keep the desired number of columns, assumes 'Q' prefix
 columns_to_keep = []
 for i in range(1, number_of_questions + 1):
@@ -46,19 +51,20 @@ columns_to_keep.extend(additional_columns)
 # Suppress FutureWarning
 warnings.simplefilter(action="ignore", category=FutureWarning)
 
-
 # Define generate report function #
 def generate_report(data_import, output_location):
+
     # Create an empty DataFrame
     df = pd.DataFrame()
-    # Read the CSV file into the DataFrame
+
+    # Read the raw CSV file into the DataFrame
     df = pd.read_csv(data_import)
 
     # Extract the first three characters from each column name and strip leading/trailing spaces
     df.columns = df.columns.str[:3].str.strip()
+    
     # Select only the desired columns
     df = df[columns_to_keep]
-    print(df.columns)
 
     # Check if the output location exists; if not, create it
     os.makedirs(output_location, exist_ok=True)
@@ -66,8 +72,10 @@ def generate_report(data_import, output_location):
     # Define Age Bins and Labels #
     bins = [18, 30, 40, 50, 65, float("inf")]
     labels = ["18-29", "30-39", "40-49", "50-64", "65+"]
+
     # Create a new column 'age_bucket' based on binning
-    df["age_bucket"] = pd.cut(df["age"], bins=bins, labels=labels, right=False)
+    df["age_bucket"] = pd.cut(df["age"], bins=bins, labels=labels, right=False, ordered = True)
+
     # Drop the original 'age' column
     df.drop("age", axis=1, inplace=True)
 
@@ -80,11 +88,11 @@ def generate_report(data_import, output_location):
     )
 
     # Sample the DataFrame with weights
-    df = df.sample(frac=1, weights=df["weights"], random_state=1)
+    #df = df.sample(frac=1, weights=df["weights"], random_state=1)
 
     # Create an Excel writer
     excel_writer = pd.ExcelWriter(
-        os.path.join(output_location, str(ReportTitle)+"output_report.xlsx"), engine="xlsxwriter"
+        os.path.join(output_location, str(ReportTitle)+" report.xlsx"), engine="xlsxwriter"
     )
 
     # Add a title page
@@ -99,8 +107,8 @@ def generate_report(data_import, output_location):
     title_page.to_excel(excel_writer, sheet_name="Title Page", index=False)
 
     # Write sampled data to a sheet
-    df.to_excel(excel_writer, sheet_name="sampled_data", index=False)
-
+    df.to_excel(excel_writer, sheet_name="Data Frame", index=False)
+    
     # Add a sheet for the survey instrument
     excel_writer.sheets["Survey Instrument"] = excel_writer.book.add_worksheet(
         "Survey Instrument"
@@ -138,9 +146,10 @@ def generate_report(data_import, output_location):
             col1 = df.columns[i]
             col2 = df.columns[j]
 
-            if col1 != "weights" and col2 != "weights":
+            if col1 != "frequency" and col2 != "frequency":
+                df = df.rename(columns={'weights': 'frequency'})
                 # Use groupby along with apply to calculate weighted crosstabs
-                tab = df.groupby([col1, col2])["weights"].sum().unstack()
+                tab = df.groupby([col1, col2])["frequency"].sum().unstack()
                 tab = tab / tab.sum() * 100
                 # Replace null or 0 with 0
                 tab = tab.fillna(0)
@@ -149,50 +158,11 @@ def generate_report(data_import, output_location):
                 tab = tab.applymap(lambda x: "{:.2f}%".format(x))
 
                 # Write crosstab to a sheet
-                tab.to_excel(excel_writer, sheet_name=f"cross_tab_{col1}_vs_{col2}")
+                tab.to_excel(excel_writer, sheet_name=f"xtab_{col1}_x_{col2}")
                 k += 1
         # Save and close the Excel writer
     excel_writer._save()
-    print("Excel workbook written successfully.")
-
+    print(str(ReportTitle)+" report successfully written to " + output_file_path)
 
 # Execute the generate_report function with specified input and output paths
 generate_report(import_file_path, output_file_path)
-
-"""
-Appendix: Technical Overview of Cell Weighting in the Context of the Script
-
-Cell weighting, as implemented in the provided Python script, involves the application of weights to individual observations based on specific combinations of categorical variables, namely gender and age categories. Unlike iterative processes, the script employs a direct cell weighting approach to refine weights without multiple iterations.
-
-Initial Weight Assignment:
-
-Initial weights are assigned to each observation based on predetermined demographic factors, such as gender and age groups.
-The script begins by calculating weights by multiplying the weights associated with gender and age categories.
-Sampling Adjustment and Cell Weighting:
-
-Cell weighting is applied to adjust these initial weights based on the observed distribution of gender and age categories in the survey data.
-The adjustment process aims to align the distribution of specific demographic groups with predetermined targets, mitigating biases associated with non-response and selection.
-Target Distribution:
-
-External targets are not explicitly defined in this script, as it assumes a direct weighting approach without iterations.
-The emphasis is on aligning the observed distribution with the predetermined weights for gender and age categories.
-Precision and Control:
-
-The direct cell weighting approach provides a high degree of precision and control over the final weights assigned to observations.
-Users can precisely define weights for gender and age categories, tailoring adjustments to specific demographic criteria.
-Impact on Final Sample:
-
-The final weights, refined through cell weighting, are applied to the survey data during sampling.
-Each observation contributes to the analysis based on the adjusted weights, ensuring that the distribution of gender and age categories aligns with the predetermined weights.
-Flexibility and Simplicity:
-
-The script offers flexibility by allowing users to define weights for gender and age categories directly.
-The approach is straightforward, making it accessible to users with diverse statistical backgrounds.
-By incorporating cell weighting into the weighting scheme, the script enables researchers to tailor adjustments to specific demographic criteria, providing flexibility and control over the survey's outcome. This direct approach simplifies the weighting process, making it accessible and precise for users aiming to address biases associated with gender and age categories in survey sampling.
-
-
-
-
-
-    Control: Users have direct control over weighting factors, facilitating fine-tuning for specific survey objectives.
-"""
