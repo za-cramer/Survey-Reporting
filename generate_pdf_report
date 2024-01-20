@@ -1,0 +1,207 @@
+# Copyright (c) 2024 Cramer Analytics LLC. All rights reserved. #
+
+# PACKAGES ! #
+import os
+import warnings
+from datetime import datetime
+
+import matplotlib.backends.backend_pdf as pdf_backend
+import matplotlib.pyplot as plt
+import pandas as pd
+from docx import Document
+
+# EDIT GLOBAL VARIABLES BELOW #
+ReportTitle = "Oklahoma Survey"
+weighted_by = "gender and age"
+
+import_file_path = (
+    "G:/My Drive/Data Work/Handy/Projects/OK County 10.2021/Text_OK_County.csv"
+)
+output_file_path = (
+    "G:/My Drive/Data Work/Handy/Projects/Test"
+)
+survey_path = (
+    "G:/My Drive/Data Work/Handy/Projects/OK County 10.2021/OK County Survey_V2.docx"
+)
+
+number_of_questions = 15  # i.e., 15 will result in Q1-Q15
+additional_columns = ["sex", "age"]  # i.e., ['sex','age'] - anything in addition to Q#
+
+# Columns to Weight #
+
+# Format
+#   VAR_weights = {cat1: X.XX, cat2: X.XX} 
+
+gender_weights = {"Female": 0.62, "Male": 0.38}
+
+age_weights = {
+    "18-29": 0.05416,
+    "30-39": 0.0775,
+    "40-49": 0.10394,
+    "50-64": 0.2952,
+    "65+": 0.46867,
+}
+
+#####################################
+###### !! DO NOT EDIT BELOW !! ######
+#####################################
+
+# Keep the desired number of columns, assumes 'Q' prefix
+columns_to_keep = []
+for i in range(1, number_of_questions + 1):
+    columns_to_keep.append("Q" + str(i))
+
+columns_to_keep.extend(additional_columns)
+
+# Suppress FutureWarning
+warnings.simplefilter(action="ignore", category=FutureWarning)
+
+# Define generate report function #
+def generate_report(data_import, output_location):
+
+    # Create an empty DataFrame
+    df = pd.DataFrame()
+
+    # Read the raw CSV file into the DataFrame
+    df = pd.read_csv(data_import)
+
+    # Extract the first three characters from each column name and strip leading/trailing spaces
+    df.columns = df.columns.str[:3].str.strip()
+    
+    # Select only the desired columns
+    df = df[columns_to_keep]
+
+    # Check if the output location exists; if not, create it
+    os.makedirs(output_location, exist_ok=True)
+
+    # Define Age Bins and Labels #
+    bins = [18, 30, 40, 50, 65, float("inf")]
+    labels = ["18-29", "30-39", "40-49", "50-64", "65+"]
+
+    # Create a new column 'age_bucket' based on binning
+    df["age_bucket"] = pd.cut(df["age"], bins=bins, labels=labels, right=False, ordered = True)
+
+    # Drop the original 'age' column
+    df.drop("age", axis=1, inplace=True)
+
+    # Replace 'M' with 'Male' and 'F' with 'Female' in the 'sex' column
+    df["sex"].replace({"M": "Male", "F": "Female"}, inplace=True)
+
+    # Calculate weights based on gender and age bucket
+    df["weights"] = df.apply(
+        lambda row: gender_weights[row["sex"]] * age_weights[row["age_bucket"]], axis=1
+    )
+
+    # Sample the DataFrame with weights
+    #df = df.sample(frac=1, weights=df["weights"], random_state=1)
+
+    # Create an Excel writer
+    pdf_writer = pdf_backend.PdfPages(os.path.join(output_location, str(ReportTitle) + " report.pdf"))
+
+    # Add a title page
+    title_page = pd.DataFrame(
+        {
+            "Title": [ReportTitle],
+            "By": ["South Creek Group"],
+            "Date": [datetime.now().strftime("%m-%d-%Y")],
+        }
+    )
+
+    # Create a figure for the title page
+    fig, ax = plt.subplots(figsize=(8.5, 11))
+    ax.axis("off")
+    ax.table(cellText=title_page.values,
+             colLabels=title_page.columns,
+             cellLoc='center',
+             loc='center')
+    pdf_writer.savefig(fig, bbox_inches='tight')
+    plt.close()
+
+    # Add the content of the survey_path document
+    if os.path.exists(survey_path):
+        doc = Document(survey_path)
+
+        # Combine all paragraphs into a single string
+        doc_content = '\n'.join(paragraph.text for paragraph in doc.paragraphs)
+
+        # Create a figure for the document content
+        fig, ax = plt.subplots(figsize=(11, 8.5))
+        ax.axis("off")
+        ax.text(0.1, 0.9, doc_content, fontsize=12)
+        pdf_writer.savefig(fig, bbox_inches='tight')
+        plt.close()        
+
+    # Add pages for toplines with weights
+    for i in df.columns:
+        if i != "weights":
+            # Create a figure for each topline
+            fig, ax = plt.subplots(figsize=(8.5, 11))
+            ax.axis("off")
+
+            # Calculate frequency counts with weights
+            freq_counts = df.groupby(i)["weights"].sum() / df["weights"].sum() * 100
+
+            # Replace null or 0 with 0
+            freq_counts = freq_counts.fillna(0)
+
+            # Format as percentage with two decimal places
+            freq_counts = freq_counts.apply(lambda x: "{:.2f}%".format(x))
+
+            # Create a table for the topline (excluding the header row)
+            cellText = [freq_counts.reset_index().columns] + freq_counts.reset_index().values.tolist()
+
+            # Rename the 'weights' column to 'Proportion'
+            cellText[0] = ["Proportion" if col == "weights" else col for col in cellText[0]]
+            table = ax.table(cellText=cellText,
+                            cellLoc='center',
+                            loc='center')
+
+            for (i, j), cell in table.get_celld().items():
+                if i == 0:
+                    cell.set_text_props(weight='bold')
+
+            pdf_writer.savefig(fig, bbox_inches='tight')
+            plt.close()
+
+    # Add pages for weighted crosstabs
+    for i in range(len(df.columns)):
+        for j in range(i + 1, len(df.columns)):
+            col1 = df.columns[i]
+            col2 = df.columns[j]
+
+            if col1 != "weights" and col2 != "weights":
+                # Create a figure for each crosstab
+                fig, ax = plt.subplots(figsize=(8.5, 11))
+                ax.axis("off")
+
+                # Use groupby along with apply to calculate weighted crosstabs
+                tab = df.groupby([col1, col2])["weights"].sum().unstack()
+                tab = tab / tab.sum() * 100
+
+                # Replace null or 0 with 0
+                tab = tab.fillna(0)
+
+                # Format as percentage with two decimal places
+                tab = tab.applymap(lambda x: "{:.2f}%".format(x))
+
+                # Rename the 'weights' column to 'Proportion'
+                tab.rename(columns={"weights": "Proportion"}, inplace=True)
+
+                # Create a table for the crosstab (excluding the header row)
+                ax.table(cellText=tab.reset_index().values.tolist(),
+                        cellLoc='center',
+                        loc='center',
+                        colLabels=[""] + list(tab.columns),
+                        colColours=["#f0f0f0"] * (len(tab.columns) + 1))
+                
+                # Add a title for the crosstab sheet
+                ax.set_title(f"Crosstab for {col1} and {col2}")
+
+                pdf_writer.savefig(fig, bbox_inches='tight')
+                plt.close()
+
+    pdf_writer.close()
+    print(str(ReportTitle) + " report successfully written to " + output_file_path)
+
+# Execute the generate_report function with specified input and output paths
+generate_report(import_file_path, output_file_path)
